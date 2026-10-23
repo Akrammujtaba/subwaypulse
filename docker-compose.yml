@@ -267,6 +267,18 @@ services:
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports: ["3000:3000"]
 
+  # Run on demand after watching the live feeds: docker compose run --rm live-report
+  live-report:
+    build: {context: ., dockerfile: infra/python/Dockerfile}
+    profiles: ["tools"]
+    environment:
+      PROMETHEUS_URL: http://prometheus:9090
+      TRINO_HOST: trino
+      TRINO_PORT: "8080"
+    volumes:
+      - ./evaluation:/out
+    command: ["python", "-m", "subwaypulse.live_report", "--out", "/out/results-live.md"]
+
 volumes:
   pgdata:
   kafkadata:
