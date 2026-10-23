@@ -1,0 +1,48 @@
+# Overlay: replace the live MTA feeds with the simulator, and add the evaluator.
+#   docker compose -f docker-compose.yml -f docker-compose.sim.yml up -d --build
+services:
+  sim:
+    build: {context: ., dockerfile: infra/python/Dockerfile}
+    depends_on:
+      schedule-loader: {condition: service_completed_successfully}
+    environment:
+      GTFS_PATH: /data/gtfs.zip
+      SIM_ROUTES: ${SIM_ROUTES:-A,C,E,L,G}
+      SIM_START: ${SIM_START:-now}
+      SIM_DURATION_MINUTES: ${SIM_DURATION_MINUTES:-120}
+      SIM_SPEED: ${SIM_SPEED:-1}
+      SIM_SEED: ${SIM_SEED:-7}
+      HOLDS_PER_HOUR: ${HOLDS_PER_HOUR:-6}
+      REFRESH_SECONDS: "30"
+      TRUTH_DIR: /truth
+    volumes:
+      - gtfs:/data:ro
+      - ./evaluation/truth:/truth
+    command: ["python", "-m", "subwaypulse.sim.server"]
+    ports: ["8090:8090"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')"]
+      interval: 5s
+      retries: 30
+
+  collector:
+    depends_on:
+      sim: {condition: service_healthy}
+    environment:
+      FEED_BASE_URL: http://sim:8090/Dataservice/mtagtfsfeeds
+      FEEDS: ${FEEDS:-ace,l,g}
+      POLL_SECONDS: ${POLL_SECONDS:-15}
+
+  # Run on demand: docker compose -f docker-compose.yml -f docker-compose.sim.yml run --rm evaluator
+  evaluator:
+    build: {context: ., dockerfile: infra/python/Dockerfile}
+    profiles: ["tools"]
+    environment:
+      TRUTH_DIR: /truth
+      TRINO_HOST: trino
+      TRINO_PORT: "8080"
+      REF_DSN: postgresql://subway:subway@postgres:5432/subway
+    volumes:
+      - ./evaluation:/out
+      - ./evaluation/truth:/truth:ro
+    command: ["python", "-m", "subwaypulse.evaluate", "--out", "/out/results.md"]

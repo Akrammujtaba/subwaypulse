@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "subwaypulse",
+      "credentials": [{"accessKey": "subwaypulse", "secretKey": "subwaypulse-secret"}],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}
