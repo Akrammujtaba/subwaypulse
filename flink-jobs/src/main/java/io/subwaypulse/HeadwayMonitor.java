@@ -167,7 +167,16 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
         if (prev != null) {
             long headwayS = (a.arrivalTs - prev.arrivalTs) / 1000;
             Integer sched = lookup(schedule, a.routeId, a.stopId, a.arrivalTs);
+            // Gaps are judged on the threshold set when the previous train arrived (the
+            // same one the gap timer uses), so the headway's status and the incidents agree
+            // across an hour boundary where the schedule changes.
+            Integer gapThr = gapTimer.value() == null ? null : gapThreshold.value();
             String status = HeadwayRules.classify(headwayS, sched);
+            if ("GAP".equals(status) && (gapThr == null || headwayS < gapThr)) {
+                status = "OK";
+            } else if ("OK".equals(status) && gapThr != null && headwayS >= gapThr) {
+                status = "GAP";
+            }
             long now = System.currentTimeMillis();
 
             Headway h = new Headway();
@@ -193,10 +202,13 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
                         sched == null ? 0 : sched, gapThreshold.value()));
             } else if ("GAP".equals(status)) {
                 // The timer didn't fire first (for example the watermark jumped), so
-                // open and close the gap together.
-                int thr = HeadwayRules.gapThreshold(sched);
-                ctx.output(INCIDENTS, incident("GAP_OPENED", prev, null, prev.arrivalTs + thr * 1000L, null, sched, thr));
-                ctx.output(INCIDENTS, incident("GAP_CLOSED", prev, a, a.arrivalTs, headwayS, sched, thr));
+                // open and close the gap together. Judged on the same threshold the timer
+                // used, from the schedule when the previous train arrived; near an hour
+                // boundary that can differ from the schedule at this train's arrival.
+                Integer schedPrev = lookup(schedule, prev.routeId, prev.stopId, prev.arrivalTs);
+                int sp = schedPrev == null ? 0 : schedPrev;
+                ctx.output(INCIDENTS, incident("GAP_OPENED", prev, null, prev.arrivalTs + gapThr * 1000L, null, sp, gapThr));
+                ctx.output(INCIDENTS, incident("GAP_CLOSED", prev, a, a.arrivalTs, headwayS, sp, gapThr));
                 gaps.inc();
             }
             if ("BUNCHING".equals(status)) {

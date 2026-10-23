@@ -18,11 +18,15 @@ class HeadwayMonitorTest {
     static final long DELAY = 60_000;
 
     static ScheduleRow sched(int headwayS) {
+        return sched(8, headwayS);
+    }
+
+    static ScheduleRow sched(int hour, int headwayS) {
         ScheduleRow r = new ScheduleRow();
         r.routeId = "L";
         r.stopId = "L08N";
         r.localDate = "2026-10-26";
-        r.hour = 8;
+        r.hour = hour;
         r.scheduledHeadwaySeconds = headwayS;
         return r;
     }
@@ -113,6 +117,17 @@ class HeadwayMonitorTest {
         h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 500_000 + DELAY));
         assertEquals(List.of(), incidents(h));
         assertEquals("OK", headways(h).get(0).status);
+    }
+
+    @Test
+    void acrossAnHourBoundaryAGapIsJudgedOnTheScheduleWhenThePreviousTrainCame() throws Exception {
+        var h = harness(300);                                    // 8 AM: every 5 min, gap at 600s
+        h.processElement2(new StreamRecord<>(sched(7, 420)));    // 7 AM: every 7 min, gap at 840s
+        h.processElement1(new StreamRecord<>(arr("t1", -240)));  // 7:56
+        h.processElement1(new StreamRecord<>(arr("t2", 420)));   // 8:07, 660s later
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 420_000 + DELAY));
+        assertEquals("OK", headways(h).get(0).status);
+        assertEquals(List.of(), incidents(h));
     }
 
     @Test
