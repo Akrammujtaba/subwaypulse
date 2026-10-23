@@ -72,6 +72,24 @@ public final class ArrivalInference {
         return r;
     }
 
+    /**
+     * The train reports it is stopped at its next stop, and that stop's arrival time
+     * has passed: it is at the platform now. Without this, a train held at a station
+     * only counts as arrived once it leaves, which can be ten minutes later, and the
+     * stop looks like it has a gap the whole time.
+     *
+     * @return the arrival at the platform, or null if the train isn't standing at one
+     */
+    public static StopPred atPlatform(String vehicleStatus, String vehicleStopId, String firstStopId,
+                                      Long firstStopArrivalTs, long feedTs) {
+        if (!"STOPPED_AT".equals(vehicleStatus) || firstStopArrivalTs == null || firstStopArrivalTs > feedTs) {
+            return null;
+        }
+        // No arrival time on the first stop means it's the origin terminal, where the
+        // feed only gives a departure. A train waiting there hasn't served anyone yet.
+        return firstStopId.equals(vehicleStopId) ? new StopPred(firstStopId, firstStopArrivalTs) : null;
+    }
+
     /** A trip left the feed. Stops predicted at or before that moment were reached. */
     public static Result reachedBeforeVanishing(List<StopPred> previous, long feedTs) {
         Result r = new Result();

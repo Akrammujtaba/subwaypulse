@@ -137,6 +137,11 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
         Long gt = gapTimer.value();
         if (gt != null && gt == ts && openGapId.value() == null) {
             Arrival prev = lastReleased.value();
+            if (trainAlreadyCame(pending.value(), prev, ts)) {
+                // The next train got here before the deadline. It's only waiting for its
+                // release, so the stop isn't overdue.
+                return;
+            }
             Integer sched = lookup(ctx.getBroadcastState(SCHEDULE), prev.routeId, prev.stopId, ts);
             if (sched != null) { // no scheduled service now means no train is overdue
                 Incident inc = incident("GAP_OPENED", prev, null, ts, null, sched, gapThreshold.value());
@@ -215,6 +220,18 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
             gapTimer.update(t);
             gapThreshold.update(thr);
         }
+    }
+
+    static boolean trainAlreadyCame(ArrayList<Arrival> waiting, Arrival prev, long deadline) {
+        if (waiting == null) {
+            return false;
+        }
+        for (Arrival a : waiting) {
+            if (a.arrivalTs > prev.arrivalTs && a.arrivalTs <= deadline && !a.tripKey.equals(prev.tripKey)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     static Integer lookup(ReadOnlyBroadcastState<String, Integer> schedule, String route, String stop, long ts)

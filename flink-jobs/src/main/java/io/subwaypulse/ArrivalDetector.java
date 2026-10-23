@@ -69,6 +69,15 @@ public class ArrivalDetector extends KeyedProcessFunction<String, TripEvent, Arr
             ArrayList<StopPred> current = toPreds(ev.getStops());
             r = ArrivalInference.passedStops(previous, current, feedTs);
             ahead.update(current);
+            if (!ev.getStops().isEmpty()) {
+                StopPrediction first = ev.getStops().get(0);
+                StopPred here = ArrivalInference.atPlatform(
+                        ev.getVehicleStatus(), ev.getVehicleStopId(), first.getStopId(),
+                        first.getArrivalTs() == null ? null : first.getArrivalTs().toEpochMilli(), feedTs);
+                if (here != null) {
+                    r.passed.add(here);
+                }
+            }
         }
         skipped.inc(r.skipped);
 

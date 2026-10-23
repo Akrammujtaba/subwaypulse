@@ -102,6 +102,20 @@ class HeadwayMonitorTest {
     }
 
     @Test
+    void noGapWhenTheNextTrainCameBeforeTheDeadlineButIsNotReleasedYet() throws Exception {
+        var h = harness(240); // gap threshold 540s
+        h.processElement1(new StreamRecord<>(arr("t1", 0)));
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + DELAY));
+        // t2 arrived at 500s; it is held until 560s, after the gap deadline at 540s
+        h.processElement1(new StreamRecord<>(arr("t2", 500)));
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 540_000));
+        assertEquals(List.of(), incidents(h));
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 500_000 + DELAY));
+        assertEquals(List.of(), incidents(h));
+        assertEquals("OK", headways(h).get(0).status);
+    }
+
+    @Test
     void anArrivalOlderThanOneAlreadyReleasedIsOnlyCounted() throws Exception {
         var h = harness(240);
         h.processElement1(new StreamRecord<>(arr("t2", 240)));

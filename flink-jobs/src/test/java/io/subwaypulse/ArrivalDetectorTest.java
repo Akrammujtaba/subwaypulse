@@ -67,6 +67,33 @@ class ArrivalDetectorTest {
     }
 
     @Test
+    void aTrainHeldAtThePlatformCountsAsArrivedBeforeItLeaves() throws Exception {
+        var h = harness();
+        h.processElement(update(TripEventType.UPDATE, 100, "A01N", 110, "A02N", 230), 100_000);
+        // At A01N and held there: still first in the list, but the train reports STOPPED_AT
+        TripEvent held = update(TripEventType.UPDATE, 130, "A01N", 112, "A02N", 400);
+        held.setVehicleStatus("STOPPED_AT");
+        held.setVehicleStopId("A01N");
+        h.processElement(held, 130_000);
+        assertEquals(List.of("A01N"), stops(h));
+        // Leaving later doesn't emit it again
+        h.processElement(update(TripEventType.UPDATE, 500, "A02N", 520), 500_000);
+        assertEquals(List.of("A01N"), stops(h));
+    }
+
+    @Test
+    void aTrainWaitingAtItsOriginTerminalHasNotArrivedAnywhere() throws Exception {
+        var h = harness();
+        TripEvent waiting = update(TripEventType.UPDATE, 100);
+        waiting.setStops(List.of(StopPrediction.newBuilder().setStopId("A01N").setArrivalTs(null)
+                .setDepartureTs(Instant.ofEpochSecond(200)).build()));
+        waiting.setVehicleStatus("STOPPED_AT");
+        waiting.setVehicleStopId("A01N");
+        h.processElement(waiting, 100_000);
+        assertEquals(List.of(), stops(h));
+    }
+
+    @Test
     void olderUpdatesForATripAreIgnored() throws Exception {
         var h = harness();
         h.processElement(update(TripEventType.UPDATE, 200, "A02N", 230), 200_000);

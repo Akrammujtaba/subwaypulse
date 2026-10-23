@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import time
 from collections import defaultdict
@@ -75,22 +76,25 @@ def true_incidents(arrivals, schedule: dict, window: Window, observed_from: floa
     bunching, gaps = {}, {}
     for (route, stop), rows in by_stop.items():
         rows.sort()
-        for (t_prev, trip_prev), (t, trip) in zip(rows, rows[1:], strict=False):
+        for i, (t_prev, trip_prev) in enumerate(rows):
             if t_prev < observed_from:
                 continue
-            sched = schedule.get(sched_key(route, stop, t))
-            kind = classify(t - t_prev, sched)
-            if kind == "BUNCHING" and window.start <= t <= window.end:
-                bunching[(route, stop, trip)] = t
-            elif kind == "GAP":
-                # The pipeline judges an open gap on the schedule in force when the
-                # previous train left; use the same here.
-                sched_prev = schedule.get(sched_key(route, stop, t_prev))
-                if sched_prev is None:
-                    continue
-                knowable = t_prev + gap_threshold_s(sched_prev)
-                if window.start <= knowable <= window.end:
-                    gaps[(route, stop, trip_prev)] = knowable
+            t_next, trip_next = rows[i + 1] if i + 1 < len(rows) else (math.inf, None)
+            if trip_next is not None:
+                sched = schedule.get(sched_key(route, stop, t_next))
+                if classify(t_next - t_prev, sched) == "BUNCHING" and window.start <= t_next <= window.end:
+                    bunching[(route, stop, trip_next)] = t_next
+            # A gap is judged the way the pipeline's timer judges it: on the schedule in
+            # force when the previous train arrived, and only if service is still
+            # scheduled at the deadline. It counts even if no train ever came after.
+            sched_prev = schedule.get(sched_key(route, stop, t_prev))
+            if sched_prev is None:
+                continue
+            deadline = t_prev + gap_threshold_s(sched_prev)
+            if schedule.get(sched_key(route, stop, deadline)) is None:
+                continue
+            if t_next > deadline and window.start <= deadline <= window.end:
+                gaps[(route, stop, trip_prev)] = deadline
     return bunching, gaps
 
 
