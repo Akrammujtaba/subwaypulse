@@ -19,6 +19,7 @@ import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.datastream.BroadcastStream;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -78,7 +79,9 @@ public class SubwayPulseJob {
                 .setBootstrapServers(bootstrap)
                 .setTopics(env("TRIP_TOPIC", "subway.trip_events"))
                 .setGroupId("subwaypulse-flink")
-                .setStartingOffsets(OffsetsInitializer.earliest())
+                // Resume from offsets committed on the last checkpoint if the job is
+                // started fresh; start from the beginning the very first time.
+                .setStartingOffsets(OffsetsInitializer.committedOffsets(OffsetResetStrategy.EARLIEST))
                 .setValueOnlyDeserializer(new RegistryAvroDeserializer(registry))
                 .build();
 

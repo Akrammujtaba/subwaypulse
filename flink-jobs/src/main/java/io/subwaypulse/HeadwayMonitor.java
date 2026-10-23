@@ -41,8 +41,11 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
     public static final OutputTag<Incident> INCIDENTS = new OutputTag<>("incidents") {};
     /** Keep schedule rows this many days before the newest date seen. */
     static final int SCHEDULE_KEEP_DAYS = 2;
+    static final long SCHEDULE_WAIT_MS = 15_000;
 
     private final long releaseDelayMs;
+    /** Newest schedule date this instance has seen; only used to decide when to prune. */
+    private transient String newestDate;
 
     private transient ValueState<ArrayList<Arrival>> pending;
     private transient ValueState<Arrival> lastReleased;
@@ -87,7 +90,13 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
     public void processBroadcastElement(ScheduleRow row, Context ctx, Collector<Headway> out) throws Exception {
         BroadcastState<String, Integer> state = ctx.getBroadcastState(SCHEDULE);
         state.put(row.key(), row.scheduledHeadwaySeconds);
-        // Drop dates well before this one so the state doesn't grow forever.
+        if (newestDate != null && row.localDate.compareTo(newestDate) <= 0) {
+            return;
+        }
+        // First row of a newer date: drop dates well before it so the state doesn't
+        // grow forever. Only on a new date, because a full scan per row made loading
+        // ~70k rows quadratic.
+        newestDate = row.localDate;
         String cutoff = LocalDate.parse(row.localDate).minusDays(SCHEDULE_KEEP_DAYS).toString();
         Iterator<Map.Entry<String, Integer>> it = state.iterator();
         while (it.hasNext()) {
@@ -101,6 +110,13 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
     @Override
     public void onTimer(long ts, OnTimerContext ctx, Collector<Headway> out) throws Exception {
         ArrayList<Arrival> buf = pending.value();
+        if (buf != null && !buf.isEmpty()
+                && !ctx.getBroadcastState(SCHEDULE).immutableEntries().iterator().hasNext()) {
+            // The schedule hasn't arrived yet (job just started and the two sources race).
+            // Judging headways now would mark them all UNSCHEDULED, so wait.
+            ctx.timerService().registerEventTimeTimer(ts + SCHEDULE_WAIT_MS);
+            return;
+        }
         if (buf != null && !buf.isEmpty()) {
             ArrayList<Arrival> ready = new ArrayList<>();
             ArrayList<Arrival> keep = new ArrayList<>();
