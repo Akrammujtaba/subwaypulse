@@ -17,6 +17,7 @@ import uuid
 from datetime import date, timedelta
 
 os.environ.setdefault("GX_ANALYTICS_ENABLED", "false")
+os.environ.setdefault("TQDM_DISABLE", "1")
 
 
 def arrival_expectations(gxe) -> list:
@@ -25,9 +26,10 @@ def arrival_expectations(gxe) -> list:
         gxe.ExpectColumnValuesToNotBeNull(column="stop_id"),
         gxe.ExpectColumnValuesToMatchRegex(column="stop_id", regex=r"^[A-Z0-9]+[NS]$"),
         gxe.ExpectColumnValuesToBeInSet(column="direction", value_set=["N", "S"]),
-        # An arrival can't be detected before it happened. Small negative values would
-        # mean a clock problem, large ones a bug in arrival inference.
-        gxe.ExpectColumnValuesToBeBetween(column="detect_lag_s", min_value=-5, max_value=3600),
+        # The update that revealed an arrival can't come before it, and should come
+        # within minutes. Both times are feed (event) time, so this holds for live and
+        # simulated runs alike.
+        gxe.ExpectColumnValuesToBeBetween(column="observe_lag_s", min_value=0, max_value=1800),
     ]
 
 
@@ -88,11 +90,16 @@ def main() -> None:
     conn = trino.dbapi.connect(host=os.environ.get("TRINO_HOST", "localhost"),
                                port=int(os.environ.get("TRINO_PORT", "8080")), user="quality", catalog="lake")
     rng = f"BETWEEN TIMESTAMP '{lo} 00:00:00 UTC' AND TIMESTAMP '{hi} 00:00:00 UTC'"
-    arrivals = pd.read_sql(
-        f"SELECT trip_key, stop_id, direction, date_diff('second', arrival_ts, detected_at) AS detect_lag_s "
-        f"FROM silver.arrivals WHERE arrival_ts {rng}", conn)
-    headways = pd.read_sql(
-        f"SELECT trip_key, headway_s, status FROM silver.headways WHERE arrival_ts {rng}", conn)
+    def frame(sql: str) -> pd.DataFrame:
+        cur = conn.cursor()
+        cur.execute(sql)
+        rows = cur.fetchall()
+        return pd.DataFrame(rows, columns=[c[0] for c in cur.description])
+
+    arrivals = frame(
+        f"SELECT trip_key, stop_id, direction, date_diff('second', arrival_ts, observed_at) AS observe_lag_s "
+        f"FROM silver.arrivals WHERE arrival_ts {rng}")
+    headways = frame(f"SELECT trip_key, headway_s, status FROM silver.headways WHERE arrival_ts {rng}")
 
     results = []
     if len(arrivals):
