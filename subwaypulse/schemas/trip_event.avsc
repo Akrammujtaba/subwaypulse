@@ -1,0 +1,30 @@
+{
+  "type": "record",
+  "name": "TripEvent",
+  "namespace": "io.subwaypulse.avro",
+  "doc": "One train's state as of one feed fetch. Sent only when something changed.",
+  "fields": [
+    {"name": "event_type", "type": {"type": "enum", "name": "TripEventType",
+      "symbols": ["UPDATE", "VANISHED", "HEARTBEAT"]},
+     "doc": "UPDATE: trip changed. VANISHED: trip dropped out of the feed. HEARTBEAT: no trip, only advances event time on a partition."},
+    {"name": "feed_id", "type": "string"},
+    {"name": "feed_ts", "type": {"type": "long", "logicalType": "timestamp-millis"},
+     "doc": "Feed header timestamp. This is the event time."},
+    {"name": "fetched_at", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+    {"name": "trip_key", "type": ["null", "string"], "default": null,
+     "doc": "start_date:trip_id, unique for a service day."},
+    {"name": "trip_id", "type": ["null", "string"], "default": null},
+    {"name": "start_date", "type": ["null", "string"], "default": null},
+    {"name": "route_id", "type": ["null", "string"], "default": null},
+    {"name": "direction", "type": ["null", "string"], "default": null},
+    {"name": "vehicle_status", "type": ["null", "string"], "default": null},
+    {"name": "vehicle_stop_id", "type": ["null", "string"], "default": null},
+    {"name": "vehicle_ts", "type": ["null", {"type": "long", "logicalType": "timestamp-millis"}], "default": null},
+    {"name": "stops", "default": [], "type": {"type": "array", "items": {
+      "type": "record", "name": "StopPrediction", "fields": [
+        {"name": "stop_id", "type": "string"},
+        {"name": "arrival_ts", "type": ["null", {"type": "long", "logicalType": "timestamp-millis"}], "default": null},
+        {"name": "departure_ts", "type": ["null", {"type": "long", "logicalType": "timestamp-millis"}], "default": null}
+      ]}}}
+  ]
+}
