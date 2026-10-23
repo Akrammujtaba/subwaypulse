@@ -115,6 +115,9 @@ def main() -> None:
     ap.add_argument("--out", default="evaluation/results.md")
     ap.add_argument("--warmup-minutes", type=float, default=10)
     ap.add_argument("--settle-minutes", type=float, default=5)
+    ap.add_argument("--until-minutes", type=float, default=None,
+                    help="end the scored window this many simulated minutes after the start, "
+                         "to compare two runs over the same stretch")
     args = ap.parse_args()
 
     import psycopg
@@ -129,6 +132,8 @@ def main() -> None:
     sim_now = wall_to_sim(time.time())
     window = Window(meta["sim_start"] + args.warmup_minutes * 60,
                     min(sim_now, meta["sim_end"]) - args.settle_minutes * 60)
+    if args.until_minutes is not None:
+        window.end = min(window.end, meta["sim_start"] + args.until_minutes * 60)
     if window.end <= window.start:
         raise SystemExit("not enough simulated time has passed yet; let it run longer")
 

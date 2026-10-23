@@ -13,7 +13,7 @@ Planned improvements, roughly smallest first. Each one is a self-contained chang
 ## Medium
 
 - [ ] **Measure the release-delay trade-off.** Run the evaluator at `RELEASE_DELAY_SECONDS` = 15, 30, 60 and chart detection latency against late arrivals dropped.
-- [ ] **Use VehiclePosition `STOPPED_AT` as a second arrival signal** and compare accuracy with stop-list inference in the simulator.
+- [x] **Use VehiclePosition `STOPPED_AT` as a second arrival signal**, so a train held at a platform counts as arrived when it stops, not when it leaves. Measured before and after with the evaluator (see design decisions, bug 4).
 - [ ] **Replay tool for the raw archive.** Read a day of segments from S3 and serve them through the simulator's HTTP server at any speed, so a real day can be re-run through a new job version.
 - [ ] **RocksDB state backend with incremental checkpoints**, and measure checkpoint size and duration against the hashmap backend.
 - [ ] **Late arrivals: correct instead of drop.** Insert the late train, emit corrected headways for both neighbours, and retract an incident it invalidates.
