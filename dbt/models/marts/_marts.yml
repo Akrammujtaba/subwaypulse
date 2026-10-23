@@ -1,0 +1,47 @@
+version: 2
+
+models:
+  - name: dim_stops
+    description: Directional platform stops with their station names.
+    columns:
+      - name: stop_id
+        data_tests: [unique, not_null]
+      - name: direction
+        data_tests:
+          - accepted_values:
+              values: ['N', 'S']
+
+  - name: fct_incidents
+    description: One row per bunching or gap incident, with how fast it was detected.
+    columns:
+      - name: incident_id
+        data_tests: [unique, not_null]
+      - name: incident_type
+        data_tests:
+          - accepted_values:
+              values: ['BUNCHING', 'GAP']
+      - name: status
+        data_tests:
+          - accepted_values:
+              values: ['OPEN', 'CLOSED']
+      - name: stop_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_stops')
+              field: stop_id
+              config:
+                severity: warn  # a stop can be missing until the schedule refresh
+
+  - name: fct_line_reliability_hourly
+    description: >
+      Headways, excess wait time, and incident counts per route, direction, and
+      NYC local hour.
+    data_tests:
+      - unique_combination:
+          columns: ['route_id', 'direction', 'hour_start']
+    columns:
+      - name: headways
+        data_tests: [not_null]
+      - name: share_within_schedule
+        data_tests: [not_null]

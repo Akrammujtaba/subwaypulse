@@ -1,0 +1,7 @@
+stop_id,stop_name,lat,lon,parent_station
+T01,Test Av,40.70,-73.90,
+T01N,Test Av,40.70,-73.90,T01
+T01S,Test Av,40.70,-73.90,T01
+T02,Sample St,40.71,-73.91,
+T02N,Sample St,40.71,-73.91,T02
+T02S,Sample St,40.71,-73.91,T02

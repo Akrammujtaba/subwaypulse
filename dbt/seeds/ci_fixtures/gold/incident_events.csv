@@ -1,0 +1,4 @@
+incident_id,event_type,route_id,direction,stop_id,prev_arrival_ts,prev_trip_key,arrival_ts,trip_key,event_ts,headway_s,scheduled_headway_s,threshold_s,detected_at
+b-1,BUNCHING,T,N,T01N,2026-10-26 12:04:00+00,20261026:t2,2026-10-26 12:05:00+00,20261026:t3,2026-10-26 12:05:00+00,60,240,90,2026-10-26 12:06:40+00
+g-1,GAP_OPENED,T,N,T01N,2026-10-26 12:05:00+00,20261026:t3,,,2026-10-26 12:14:00+00,,240,540,2026-10-26 12:15:10+00
+g-1,GAP_CLOSED,T,N,T01N,2026-10-26 12:05:00+00,20261026:t3,2026-10-26 12:16:00+00,20261026:t4,2026-10-26 12:16:00+00,660,240,540,2026-10-26 12:17:40+00

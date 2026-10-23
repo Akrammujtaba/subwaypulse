@@ -1,0 +1,3 @@
+route_id,stop_id,local_date,hour,scheduled_headway_s,trains
+T,T01N,2026-10-26,8,240,15
+T,T02N,2026-10-26,8,240,15

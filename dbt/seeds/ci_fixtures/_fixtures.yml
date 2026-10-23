@@ -1,0 +1,17 @@
+version: 2
+
+seeds:
+  - name: arrivals
+    config:
+      column_types: {arrival_ts: timestamptz, observed_at: timestamptz, detected_at: timestamptz}
+  - name: headways
+    config:
+      column_types: {arrival_ts: timestamptz, prev_arrival_ts: timestamptz, detected_at: timestamptz,
+                     headway_s: bigint, scheduled_headway_s: integer}
+  - name: incident_events
+    config:
+      column_types: {prev_arrival_ts: timestamptz, arrival_ts: timestamptz, event_ts: timestamptz,
+                     detected_at: timestamptz, headway_s: bigint}
+  - name: scheduled_headways
+    config:
+      column_types: {local_date: date}

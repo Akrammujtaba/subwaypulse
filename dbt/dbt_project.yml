@@ -1,0 +1,34 @@
+name: subwaypulse
+version: "1.0.0"
+config-version: 2
+profile: subwaypulse
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  subwaypulse:
+    # The Iceberg JDBC catalog has no views, so staging is inlined as CTEs.
+    staging:
+      +materialized: ephemeral
+    marts:
+      +materialized: table
+      +schema: marts
+
+seeds:
+  subwaypulse:
+    # Tiny made-up copies of the pipeline tables, loaded only for the DuckDB CI target.
+    ci_fixtures:
+      +enabled: "{{ target.type == 'duckdb' }}"
+      silver:
+        +schema: silver
+      gold:
+        +schema: gold
+      ref:
+        +schema: ref
+
+flags:
+  send_anonymous_usage_stats: false

@@ -1,0 +1,33 @@
+version: 2
+
+sources:
+  - name: silver
+    description: Tables written by the Flink job.
+    database: "{{ target.database }}"
+    schema: silver
+    tables:
+      - name: arrivals
+        description: One row per train per stop it served, inferred from the realtime feed.
+        loaded_at_field: detected_at
+        freshness:
+          warn_after: {count: 10, period: minute}
+          error_after: {count: 60, period: minute}
+      - name: headways
+        description: Time between consecutive trains of one route at one stop.
+
+  - name: gold
+    database: "{{ target.database }}"
+    schema: gold
+    tables:
+      - name: incident_events
+        description: Append-only log of BUNCHING, GAP_OPENED and GAP_CLOSED events.
+
+  - name: ref
+    description: Reference data loaded from the static schedule into Postgres.
+    # A separate Postgres catalog in Trino; a plain schema in DuckDB.
+    database: "{{ 'ref' if target.type == 'trino' else target.database }}"
+    schema: ref
+    tables:
+      - name: scheduled_headways
+      - name: stops
+      - name: routes
