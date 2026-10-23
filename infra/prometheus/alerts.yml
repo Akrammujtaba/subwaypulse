@@ -1,0 +1,31 @@
+groups:
+  - name: subwaypulse
+    rules:
+      # A feed that stops updating means the pipeline is blind on those lines.
+      - alert: FeedStale
+        expr: sp_feed_age_seconds > 180
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "Feed {{ $labels.feed }} is {{ $value | humanizeDuration }} old"
+
+      - alert: FeedFetchErrors
+        expr: sum by (feed) (rate(sp_feed_fetches_total{outcome!~"changed|unchanged|not_modified"}[5m])) > 0.05
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Feed {{ $labels.feed }} is failing more than 1 in 20 fetches"
+
+      # Checkpoints commit the Iceberg writes; if they stop, tables stop updating.
+      - alert: FlinkCheckpointsStalled
+        expr: increase(flink_jobmanager_job_numberOfCompletedCheckpoints[10m]) == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "No Flink checkpoint completed in 10 minutes"
+
+      - alert: FlinkJobRestarting
+        expr: increase(flink_jobmanager_job_numRestarts[10m]) > 2
+        labels: {severity: critical}
+        annotations:
+          summary: "Flink job restarted {{ $value }} times in 10 minutes"
