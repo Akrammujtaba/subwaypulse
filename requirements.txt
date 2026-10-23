@@ -1,0 +1,11 @@
+# Runtime dependencies for the collector, simulator, schedule loader, and evaluator.
+gtfs-realtime-bindings==1.0.0
+protobuf==5.29.3
+requests==2.32.3
+confluent-kafka[avro,schemaregistry]==2.8.0
+fastavro==1.10.0
+prometheus-client==0.21.1
+zstandard==0.23.0
+boto3==1.35.90
+psycopg[binary]==3.2.4
+trino==0.331.0

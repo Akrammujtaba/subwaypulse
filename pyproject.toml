@@ -1,0 +1,22 @@
+[project]
+name = "subwaypulse"
+version = "0.1.0"
+description = "Real-time NYC subway service monitoring on Kafka, Flink, and Iceberg"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["dbt", "flink-jobs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-third-party = ["airflow"]

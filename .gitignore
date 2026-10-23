@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+flink-jobs/target/
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+*.duckdb
+.terraform/
+*.tfstate*
+.env
+# Downloaded MTA data and simulator output stay local
+data/
+truth/
+evaluation/results*.md
