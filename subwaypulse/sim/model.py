@@ -15,6 +15,8 @@ How trains move:
 
 How the feed looks at time t:
 - Every train that is running (or leaves its terminal within 10 minutes) appears.
+- A train at a platform shows its arrival time with some noise (std dev 15s), because
+  the real signal system doesn't timestamp arrivals to the second either.
 - It lists the stops it has not left yet, with predicted times. Predictions get
   more accurate as the train gets closer, and miss the unknown part of any hold.
 """
@@ -31,6 +33,9 @@ from subwaypulse.schedule import NY, StaticGtfs, scheduled_arrivals
 DWELL_S = 30
 MIN_SEPARATION_S = 75
 VISIBLE_BEFORE_S = 600
+# The signal system doesn't know to the second when a train stopped. The feed's
+# arrival time for a train at the platform is off by this much (std dev).
+OBSERVATION_NOISE_S = 15
 
 # Route -> MTA feed group. Only routes listed here can be simulated.
 ROUTE_FEED = {
@@ -68,6 +73,8 @@ class SimTrip:
     # stop index -> hold seconds, and per-stop prediction error at long range
     holds: dict[int, int] = field(default_factory=dict)
     pred_err: list[float] = field(default_factory=list)
+    # how far off the feed's own "arrived at" time is from the true one
+    obs_err: list[float] = field(default_factory=list)
 
     @property
     def feed_id(self) -> str:
@@ -140,10 +147,10 @@ class Simulation:
             line.sort(key=lambda t: t.sched[0])
             last_arrival: dict[str, float] = {}
             for t in line:
-                delay = rng.uniform(-30, 120)
+                delay = rng.uniform(-20, 60)
                 for i, sched in enumerate(t.sched):
                     if i > 0:
-                        delay = max(-60.0, delay + rng.gauss(2, 10))
+                        delay = max(-60.0, delay + rng.gauss(1, 6))
                     arr = sched + delay
                     ahead = last_arrival.get(t.stop_ids[i])
                     if ahead is not None and arr < ahead + MIN_SEPARATION_S:
@@ -162,6 +169,7 @@ class Simulation:
                     t.dep.append(dep)
                     last_arrival[t.stop_ids[i]] = arr
                 t.pred_err = [rng.gauss(0, 90) for _ in t.sched]
+                t.obs_err = [rng.gauss(0, OBSERVATION_NOISE_S) for _ in t.sched]
 
     # ---------- what the feed shows ----------
     def visible(self, t: SimTrip, now: float) -> bool:
@@ -191,7 +199,7 @@ class Simulation:
             if t.arr[i] <= now:
                 # At the platform: the arrival already happened and is known exactly.
                 # While held, the departure estimate keeps slipping.
-                arr = t.arr[i]
+                arr = t.arr[i] + t.obs_err[i]
                 dep = None if last else max(now, t.dep[i] - hidden_hold(i, t.holds.get(i, 0)))
             else:
                 hidden = sum(hidden_hold(j, h) for j, h in t.holds.items() if j < i)
