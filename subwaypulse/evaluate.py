@@ -156,7 +156,7 @@ def main() -> None:
         SELECT trip_key, stop_id, arrival_ts, detected_at FROM silver.arrivals
         WHERE arrival_ts BETWEEN {rng} AND route_id IN ({route_list})""")
     p_incidents = query(cur, f"""
-        SELECT event_type, route_id, stop_id, trip_key, prev_trip_key, event_ts, detected_at
+        SELECT event_type, route_id, stop_id, trip_key, prev_trip_key, prev_arrival_ts, event_ts, detected_at
         FROM gold.incident_events WHERE event_ts BETWEEN {rng} AND route_id IN ({route_list})""")
 
     # ----- arrivals -----
@@ -171,12 +171,17 @@ def main() -> None:
     made_up = [k for k, (at, _) in found.items() if window.start <= at <= window.end and k not in truth_by_key]
 
     # ----- incidents -----
-    t_bunch, t_gap = true_incidents(truth_arrivals, schedule, window, observed_from=meta["sim_start"] + 60)
+    observed_from = meta["sim_start"] + 60
+    t_bunch, t_gap = true_incidents(truth_arrivals, schedule, window, observed_from=observed_from)
     # key -> (event time as the pipeline saw it, detection time in simulated seconds)
     p_bunch, p_gap = {}, {}
-    for etype, route, stop, trip, prev_trip, ev, det in p_incidents:
+    for etype, route, stop, trip, prev_trip, prev_at, ev, det in p_incidents:
         target, key = (p_bunch, (route, stop, trip)) if etype == "BUNCHING" else (p_gap, (route, stop, prev_trip))
         if etype not in ("BUNCHING", "GAP_OPENED"):
+            continue
+        if truth_by_key.get((prev_trip, stop), ts(prev_at)) < observed_from:
+            # The previous train passed before the feed started, so this is left out of
+            # the truth too (see true_incidents): neither a hit nor a false alarm.
             continue
         d = wall_to_sim(ts(det))
         if key not in target or d < target[key][1]:

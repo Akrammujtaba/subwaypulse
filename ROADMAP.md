@@ -4,6 +4,7 @@ Planned improvements, roughly smallest first. Each one is a self-contained chang
 
 ## Small
 
+- [ ] **Arrivals at a line's last stop.** A trip leaves the feed the moment it reaches its terminal, so if its last prediction for that stop was a little late, the arrival is missed (6 of 2,908 in the simulator, all at terminals). Treat a trip that vanishes with only its terminal left as arrived, and measure with the evaluator.
 - [ ] **Station names in alerts.** Join `ref.stops` in a small Kafka Streams or Flink lookup so `subway.incidents` messages say "Bedford Av" instead of `L08N`.
 - [ ] **Evaluator: CSV output** next to the markdown table, for plotting.
 - [ ] **Grafana panel: incidents by route** using a route label on the Flink counters.
