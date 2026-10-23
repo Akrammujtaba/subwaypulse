@@ -100,3 +100,16 @@ The evaluator recomputes true incidents from those arrivals with the same rules 
 **2. Every headway was UNSCHEDULED on the first real run.** Two causes stacked up. Pruning old dates from the broadcast schedule ran a full scan on *every* row, which made loading ~70,000 rows quadratic, so the schedule took minutes to arrive. Meanwhile trip events, read from the other Kafka source, raced ahead and were judged against an empty schedule. Pruning now runs only when a newer date shows up, and arrivals are held while the schedule state is still empty.
 
 **3. Quality checks failed only in simulator runs.** The checks compared arrival time with the wall-clock time the job detected it. A simulator run replays a different day, so every row looked days late. The checks now compare two event times (arrival vs. the feed update that revealed it), which is the real invariant and holds in both modes.
+
+**4. Four in ten gap alerts were false, and the evaluator found out why.** The first full simulator run caught every gap, but only 58.5% of gap alerts were real. Matching each false alert to the ground truth showed two causes:
+
+- *Held trains.* A train held at a platform only counted as arrived once it left, up to 12 minutes later, so the station looked empty the whole time. The train reports `STOPPED_AT` that station in its VehiclePosition; arrivals now use that.
+- *A race with the release buffer.* The gap timer fired while the next train's arrival was already in Flink but still waiting for its release. The timer now checks the waiting arrivals first.
+
+Same window, same seed: real gap alerts went from 58.5% to 79.5%, and arrivals became available after 24 seconds (median) instead of 48.
+
+**5. The top of the hour.** Many of the remaining false alerts were around 8:00. The gap timer judged a gap on the schedule in force when the previous train arrived (say every 7 minutes), but the headway status, and the path that opens and closes a gap at once, used the schedule at the next train's arrival (every 5 minutes). Both now use the previous train's. Real gap alerts: 79.5% to 87.9%.
+
+**6. The evaluator had bugs too.** It only counted a gap if a later train eventually came, so a gap that never closed was scored as a false alarm. And it left incidents out of the truth when the first train passed before the feed started, but still counted the pipeline's alerts for them. Both fixed; the scoring rules are in `subwaypulse/evaluate.py`.
+
+What's left after all this (run 3, 65 simulated minutes): 6 false gap alerts. Four have true headways within 30 seconds of the threshold, where ±15 seconds of platform-time noise decides it. Two come from missed arrivals at a line's last stop, which is on the roadmap.
