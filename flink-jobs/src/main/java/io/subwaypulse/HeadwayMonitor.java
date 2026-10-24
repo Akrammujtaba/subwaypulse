@@ -41,10 +41,14 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
     /** Feed outages: key feedId|fromTs, value toTs. */
     public static final MapStateDescriptor<String, Long> OUTAGES =
             new MapStateDescriptor<>("outages", Types.STRING, Types.LONG);
+    /** Per feed, the newest time it was fetched successfully. */
+    public static final MapStateDescriptor<String, Long> LAST_SEEN =
+            new MapStateDescriptor<>("lastSeen", Types.STRING, Types.LONG);
     public static final OutputTag<Incident> INCIDENTS = new OutputTag<>("incidents") {};
     /** Keep schedule rows this many days before the newest date seen. */
     static final int SCHEDULE_KEEP_DAYS = 2;
     static final long SCHEDULE_WAIT_MS = 15_000;
+    static final long FEED_WAIT_MS = 15_000;
 
     private final long releaseDelayMs;
     /** Newest schedule date this instance has seen; only used to decide when to prune. */
@@ -61,6 +65,7 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
     private transient Counter gaps;
     private transient Counter blindHeadways;
     private transient Counter blindGapTimers;
+    private transient Counter gapWaitsForFeed;
 
     public HeadwayMonitor(long releaseDelayMs) {
         this.releaseDelayMs = releaseDelayMs;
@@ -80,6 +85,7 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
         gaps = getRuntimeContext().getMetricGroup().counter("gapIncidents");
         blindHeadways = getRuntimeContext().getMetricGroup().counter("headwaysSkippedForOutage");
         blindGapTimers = getRuntimeContext().getMetricGroup().counter("gapsSkippedForOutage");
+        gapWaitsForFeed = getRuntimeContext().getMetricGroup().counter("gapWaitsForFeed");
     }
 
     @Override
@@ -95,6 +101,14 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
 
     @Override
     public void processBroadcastElement(Reference ref, Context ctx, Collector<Headway> out) throws Exception {
+        if (ref.seenFeedId != null) {
+            BroadcastState<String, Long> seen = ctx.getBroadcastState(LAST_SEEN);
+            Long old = seen.get(ref.seenFeedId);
+            if (old == null || ref.seenTs > old) {
+                seen.put(ref.seenFeedId, ref.seenTs);
+            }
+            return;
+        }
         if (ref.outage != null) {
             BroadcastState<String, Long> outages = ctx.getBroadcastState(OUTAGES);
             outages.put(ref.outage.key(), ref.outage.toTs);
@@ -161,20 +175,31 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
         Long gt = gapTimer.value();
         if (gt != null && gt == ts && openGapId.value() == null) {
             Arrival prev = lastReleased.value();
-            if (blind(ctx.getBroadcastState(OUTAGES), prev.feedId, prev.arrivalTs, ts)) {
+            long deadline = prev.arrivalTs + gapThreshold.value() * 1000L;
+            Long seen = ctx.getBroadcastState(LAST_SEEN).get(prev.feedId);
+            if (seen != null && seen < deadline) {
+                // Event time passed the deadline, but on other feeds: this one hasn't been
+                // fetched since before it. Wait until it has, or until it reports an outage.
+                gapWaitsForFeed.inc();
+                long next = Math.max(ts, ctx.timerService().currentWatermark()) + FEED_WAIT_MS;
+                ctx.timerService().registerEventTimeTimer(next);
+                gapTimer.update(next);
+                return;
+            }
+            if (blind(ctx.getBroadcastState(OUTAGES), prev.feedId, prev.arrivalTs, deadline)) {
                 // The feed wasn't observed for part of this stretch, so a train may well
                 // have come. Silence in the data is not silence on the platform.
                 blindGapTimers.inc();
                 return;
             }
-            if (trainAlreadyCame(pending.value(), prev, ts)) {
+            if (trainAlreadyCame(pending.value(), prev, deadline)) {
                 // The next train got here before the deadline. It's only waiting for its
                 // release, so the stop isn't overdue.
                 return;
             }
-            Integer sched = lookup(ctx.getBroadcastState(SCHEDULE), prev.routeId, prev.stopId, ts);
+            Integer sched = lookup(ctx.getBroadcastState(SCHEDULE), prev.routeId, prev.stopId, deadline);
             if (sched != null) { // no scheduled service now means no train is overdue
-                Incident inc = incident("GAP_OPENED", prev, null, ts, null, sched, gapThreshold.value());
+                Incident inc = incident("GAP_OPENED", prev, null, deadline, null, sched, gapThreshold.value());
                 openGapId.update(inc.incidentId);
                 gaps.inc();
                 ctx.output(INCIDENTS, inc);

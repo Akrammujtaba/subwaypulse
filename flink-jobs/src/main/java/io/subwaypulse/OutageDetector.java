@@ -15,11 +15,13 @@ import org.apache.flink.util.Collector;
  * long silence (the feed was down, the collector stopped, or the machine slept) is
  * emitted as an {@link Outage}, so HeadwayMonitor doesn't read "no data" as "no trains".
  *
- * <p>The outage goes out before the watermark that crosses it, because it is emitted
- * while processing the heartbeat that ends it. Downstream, it therefore reaches
- * HeadwayMonitor before any timer inside the outage fires.
+ * <p>Every new heartbeat also goes out as a "seen" marker. An outage on one feed is only
+ * known once that feed comes back, while the other feeds keep event time moving. So
+ * HeadwayMonitor doesn't open a gap until the feed has been seen past the deadline: by
+ * then, any outage covering the deadline has been reported, because the outage is
+ * emitted just before the marker of the heartbeat that ends it.
  */
-public class OutageDetector extends KeyedProcessFunction<String, TripEvent, Outage> {
+public class OutageDetector extends KeyedProcessFunction<String, TripEvent, Reference> {
     private final long maxSilenceMs;
     private transient ValueState<Long> lastSeen;
     private transient Counter outages;
@@ -35,7 +37,7 @@ public class OutageDetector extends KeyedProcessFunction<String, TripEvent, Outa
     }
 
     @Override
-    public void processElement(TripEvent hb, Context ctx, Collector<Outage> out) throws Exception {
+    public void processElement(TripEvent hb, Context ctx, Collector<Reference> out) throws Exception {
         long ts = hb.getFeedTs().toEpochMilli();
         Long last = lastSeen.value();
         if (last != null && ts <= last) {
@@ -43,8 +45,9 @@ public class OutageDetector extends KeyedProcessFunction<String, TripEvent, Outa
         }
         if (last != null && ts - last > maxSilenceMs) {
             outages.inc();
-            out.collect(new Outage(hb.getFeedId(), last, ts));
+            out.collect(Reference.of(new Outage(hb.getFeedId(), last, ts)));
         }
         lastSeen.update(ts);
+        out.collect(Reference.seen(hb.getFeedId(), ts));
     }
 }

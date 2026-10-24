@@ -38,7 +38,7 @@ class HeadwayMonitorTest {
 
     static KeyedTwoInputStreamOperatorTestHarness<String, Arrival, Reference, Headway> harness(int schedS)
             throws Exception {
-        var op = new CoBroadcastWithKeyedOperator<>(new HeadwayMonitor(DELAY), List.of(HeadwayMonitor.SCHEDULE, HeadwayMonitor.OUTAGES));
+        var op = new CoBroadcastWithKeyedOperator<>(new HeadwayMonitor(DELAY), List.of(HeadwayMonitor.SCHEDULE, HeadwayMonitor.OUTAGES, HeadwayMonitor.LAST_SEEN));
         var h = new KeyedTwoInputStreamOperatorTestHarness<>(op, Arrival::lineStopKey, r -> "unused", Types.STRING);
         h.open();
         h.processElement2(new StreamRecord<>(Reference.of(sched(schedS))));
@@ -170,6 +170,55 @@ class HeadwayMonitorTest {
         assertEquals(List.of("GAP_OPENED"), incidents(h));
     }
 
+    static Reference seen(long atS) {
+        return Reference.seen("l", T0 + atS * 1000);
+    }
+
+    @Test
+    void noGapAlarmWhileOnlyOtherFeedsMoveEventTimeAndThisOneIsDown() throws Exception {
+        var h = harness(240); // gap threshold 540s
+        h.processElement1(new StreamRecord<>(arr("t1", 0)));
+        h.processElement2(new StreamRecord<>(seen(200)));        // last fetch of this feed before it went down
+        // Other feeds carry event time past the deadline; this one's outage isn't known yet
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 700_000));
+        assertEquals(List.of(), incidents(h));
+        // The feed comes back at 900s: the outage, then the heartbeat that ended it
+        h.processElement2(new StreamRecord<>(outage(200, 900)));
+        h.processElement2(new StreamRecord<>(seen(900)));
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 960_000));
+        assertEquals(List.of(), incidents(h));
+    }
+
+    @Test
+    void noGapAlarmWhenTheOutageNoticeIsStillOnItsWayAfterAllFeedsComeBack() throws Exception {
+        var h = harness(240); // gap threshold 540s
+        h.processElement1(new StreamRecord<>(arr("t1", 0)));
+        h.processElement2(new StreamRecord<>(seen(200)));
+        // Every feed is down, so the reference input goes idle. When the feeds return,
+        // the arrivals input moves event time first, before the outage notice arrives.
+        h.processWatermarkStatus2(org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus.IDLE);
+        h.processWatermark1(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 900_000));
+        assertEquals(List.of(), incidents(h));
+        h.processWatermarkStatus2(org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus.ACTIVE);
+        h.processElement2(new StreamRecord<>(outage(200, 900)));
+        h.processElement2(new StreamRecord<>(seen(900)));
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 960_000));
+        assertEquals(List.of(), incidents(h));
+    }
+
+    @Test
+    void aGapWaitsForTheFeedAndThenOpensAtTheDeadline() throws Exception {
+        var h = harness(240); // gap threshold 540s
+        h.processElement1(new StreamRecord<>(arr("t1", 0)));
+        h.processElement2(new StreamRecord<>(seen(530)));
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 545_000));
+        assertEquals(List.of(), incidents(h));                   // feed not yet seen past 540s
+        h.processElement2(new StreamRecord<>(seen(545)));        // seen, no outage: the gap is real
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 560_000));
+        assertEquals(List.of("GAP_OPENED"), incidents(h));
+        assertEquals(T0 + 540_000, h.getSideOutput(HeadwayMonitor.INCIDENTS).peek().getValue().eventTs);
+    }
+
     @Test
     void anArrivalOlderThanOneAlreadyReleasedIsOnlyCounted() throws Exception {
         var h = harness(240);
@@ -182,7 +231,7 @@ class HeadwayMonitorTest {
 
     @Test
     void noScheduleMeansNoGapAlarm() throws Exception {
-        var op = new CoBroadcastWithKeyedOperator<>(new HeadwayMonitor(DELAY), List.of(HeadwayMonitor.SCHEDULE, HeadwayMonitor.OUTAGES));
+        var op = new CoBroadcastWithKeyedOperator<>(new HeadwayMonitor(DELAY), List.of(HeadwayMonitor.SCHEDULE, HeadwayMonitor.OUTAGES, HeadwayMonitor.LAST_SEEN));
         var h = new KeyedTwoInputStreamOperatorTestHarness<String, Arrival, Reference, Headway>(
                 op, Arrival::lineStopKey, r -> "unused", Types.STRING);
         h.open();

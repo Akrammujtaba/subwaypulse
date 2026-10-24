@@ -105,9 +105,7 @@ public class SubwayPulseJob {
                 .name("heartbeats").uid("heartbeats")
                 .keyBy(e -> e.getFeedId())
                 .process(new OutageDetector(outageAfterMs))
-                .name("outage-detector").uid("outage-detector")
-                .map(o -> Reference.of(o)).returns(Reference.class)
-                .name("outage-ref").uid("outage-ref");
+                .name("outage-detector").uid("outage-detector");
 
         // ---------- schedule (broadcast) ----------
         KafkaSource<String> scheduleSource = KafkaSource.<String>builder()
@@ -129,15 +127,14 @@ public class SubwayPulseJob {
             }
         });
 
-        // Schedule rows and outages share one broadcast input. Its watermark is the
-        // outages' (the schedule's is MAX), so an outage arrives before timers inside it fire.
+        // Schedule rows, outages, and "feed seen" markers share one broadcast input.
         BroadcastStream<Reference> reference = env.fromSource(scheduleSource, neverBlocks, "schedule")
                 .uid("schedule-source")
                 .map(new ParseSchedule()).name("parse-schedule").uid("parse-schedule")
                 .filter(r -> r != null)
                 .map(r -> Reference.of(r)).returns(Reference.class).name("schedule-ref").uid("schedule-ref")
                 .union(outages)
-                .broadcast(HeadwayMonitor.SCHEDULE, HeadwayMonitor.OUTAGES);
+                .broadcast(HeadwayMonitor.SCHEDULE, HeadwayMonitor.OUTAGES, HeadwayMonitor.LAST_SEEN);
 
         // ---------- processing ----------
         DataStream<Arrival> arrivals = tripEvents
