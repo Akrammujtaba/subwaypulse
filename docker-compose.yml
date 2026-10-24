@@ -172,6 +172,7 @@ services:
       OUT_OF_ORDER_SECONDS: ${OUT_OF_ORDER_SECONDS:-45}
       RELEASE_DELAY_SECONDS: ${RELEASE_DELAY_SECONDS:-60}
       CHECKPOINT_SECONDS: ${CHECKPOINT_SECONDS:-30}
+      OUTAGE_AFTER_SECONDS: ${OUTAGE_AFTER_SECONDS:-120}
     command: ["standalone-job", "--job-classname", "io.subwaypulse.SubwayPulseJob"]
     ports: ["8082:8081"]
     restart: unless-stopped

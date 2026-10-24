@@ -35,9 +35,12 @@ import org.apache.flink.util.OutputTag;
  * stop, date, and hour) arrives as broadcast state, so it can be refreshed without
  * restarting the job.
  */
-public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arrival, ScheduleRow, Headway> {
+public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arrival, Reference, Headway> {
     public static final MapStateDescriptor<String, Integer> SCHEDULE =
             new MapStateDescriptor<>("schedule", Types.STRING, Types.INT);
+    /** Feed outages: key feedId|fromTs, value toTs. */
+    public static final MapStateDescriptor<String, Long> OUTAGES =
+            new MapStateDescriptor<>("outages", Types.STRING, Types.LONG);
     public static final OutputTag<Incident> INCIDENTS = new OutputTag<>("incidents") {};
     /** Keep schedule rows this many days before the newest date seen. */
     static final int SCHEDULE_KEEP_DAYS = 2;
@@ -56,6 +59,8 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
     private transient Counter unscheduled;
     private transient Counter bunching;
     private transient Counter gaps;
+    private transient Counter blindHeadways;
+    private transient Counter blindGapTimers;
 
     public HeadwayMonitor(long releaseDelayMs) {
         this.releaseDelayMs = releaseDelayMs;
@@ -73,6 +78,8 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
         unscheduled = getRuntimeContext().getMetricGroup().counter("unscheduledHeadways");
         bunching = getRuntimeContext().getMetricGroup().counter("bunchingIncidents");
         gaps = getRuntimeContext().getMetricGroup().counter("gapIncidents");
+        blindHeadways = getRuntimeContext().getMetricGroup().counter("headwaysSkippedForOutage");
+        blindGapTimers = getRuntimeContext().getMetricGroup().counter("gapsSkippedForOutage");
     }
 
     @Override
@@ -87,7 +94,24 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
     }
 
     @Override
-    public void processBroadcastElement(ScheduleRow row, Context ctx, Collector<Headway> out) throws Exception {
+    public void processBroadcastElement(Reference ref, Context ctx, Collector<Headway> out) throws Exception {
+        if (ref.outage != null) {
+            BroadcastState<String, Long> outages = ctx.getBroadcastState(OUTAGES);
+            outages.put(ref.outage.key(), ref.outage.toTs);
+            // Outages are rare; drop ones that ended more than a day before this one.
+            long cutoff = ref.outage.fromTs - 86_400_000L;
+            Iterator<Map.Entry<String, Long>> it = outages.iterator();
+            while (it.hasNext()) {
+                if (it.next().getValue() < cutoff) {
+                    it.remove();
+                }
+            }
+            return;
+        }
+        ScheduleRow row = ref.schedule;
+        if (row == null) {
+            return;
+        }
         BroadcastState<String, Integer> state = ctx.getBroadcastState(SCHEDULE);
         state.put(row.key(), row.scheduledHeadwaySeconds);
         if (newestDate != null && row.localDate.compareTo(newestDate) <= 0) {
@@ -137,6 +161,12 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
         Long gt = gapTimer.value();
         if (gt != null && gt == ts && openGapId.value() == null) {
             Arrival prev = lastReleased.value();
+            if (blind(ctx.getBroadcastState(OUTAGES), prev.feedId, prev.arrivalTs, ts)) {
+                // The feed wasn't observed for part of this stretch, so a train may well
+                // have come. Silence in the data is not silence on the platform.
+                blindGapTimers.inc();
+                return;
+            }
             if (trainAlreadyCame(pending.value(), prev, ts)) {
                 // The next train got here before the deadline. It's only waiting for its
                 // release, so the stop isn't overdue.
@@ -164,6 +194,17 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
             return;
         }
         ReadOnlyBroadcastState<String, Integer> schedule = ctx.getBroadcastState(SCHEDULE);
+        if (prev != null && blind(ctx.getBroadcastState(OUTAGES), a.feedId, prev.arrivalTs, a.arrivalTs)) {
+            // A train may have come in between without being seen, so this is not a
+            // headway. Start over from this train.
+            blindHeadways.inc();
+            if (openGapId.value() != null) {
+                // Opened before the outage; when it ended can't be known.
+                ctx.output(INCIDENTS, incident("GAP_CLOSED", prev, a, a.arrivalTs, null,
+                        0, gapThreshold.value()));
+            }
+            prev = null;
+        }
         if (prev != null) {
             long headwayS = (a.arrivalTs - prev.arrivalTs) / 1000;
             Integer sched = lookup(schedule, a.routeId, a.stopId, a.arrivalTs);
@@ -232,6 +273,21 @@ public class HeadwayMonitor extends KeyedBroadcastProcessFunction<String, Arriva
             gapTimer.update(t);
             gapThreshold.update(thr);
         }
+    }
+
+    /** True if the feed went unobserved for any part of (fromTs, toTs). */
+    static boolean blind(ReadOnlyBroadcastState<String, Long> outages, String feedId, long fromTs, long toTs)
+            throws Exception {
+        String prefix = feedId + "|";
+        for (Map.Entry<String, Long> e : outages.immutableEntries()) {
+            if (e.getKey().startsWith(prefix)) {
+                long start = Long.parseLong(e.getKey().substring(prefix.length()));
+                if (start < toTs && e.getValue() > fromTs) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     static boolean trainAlreadyCame(ArrayList<Arrival> waiting, Arrival prev, long deadline) {

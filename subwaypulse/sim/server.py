@@ -14,6 +14,9 @@ Settings (environment):
     HOLDS_PER_HOUR       incidents injected per simulated hour (default 6)
     P_STALE, P_ERROR, P_BLINK   noise: serve the previous snapshot, return HTTP 503,
                          drop ~2% of trains from one snapshot
+    SIM_OUTAGES          e.g. "30+10": from 30 to 40 simulated minutes after the start,
+                         every feed returns HTTP 503 (a dead feed, or a machine asleep);
+                         comma-separated for several
     TRUTH_DIR            where ground truth is written for the evaluator
 """
 
@@ -90,7 +93,17 @@ class FeedStore:
         return raw
 
 
-def write_truth(sim: Simulation, clock: SimClock, out: Path, routes: list[str]) -> None:
+def parse_outages(spec: str, sim_start: float) -> list[tuple[float, float]]:
+    """"30+10,90+5" -> [(start + 30 min, start + 40 min), (start + 90 min, start + 95 min)]."""
+    out = []
+    for part in filter(None, (p.strip() for p in spec.split(","))):
+        at, length = (float(x) for x in part.split("+"))
+        out.append((sim_start + at * 60, sim_start + (at + length) * 60))
+    return out
+
+
+def write_truth(sim: Simulation, clock: SimClock, out: Path, routes: list[str],
+                outages: list[tuple[float, float]] = ()) -> None:
     out.mkdir(parents=True, exist_ok=True)
     with open(out / "arrivals.csv", "w", newline="") as f:
         w = csv.writer(f)
@@ -105,6 +118,7 @@ def write_truth(sim: Simulation, clock: SimClock, out: Path, routes: list[str]) 
     (out / "meta.json").write_text(json.dumps({
         "sim_start": clock.sim_start, "sim_end": sim.end, "speed": clock.speed,
         "wall_start": clock.wall_start, "routes": routes, "trips": len(sim.trips),
+        "outages": [list(o) for o in outages],
     }, indent=2))
 
 
@@ -126,7 +140,8 @@ def main() -> None:
              ",".join(routes), time.time() - t0)
 
     clock = SimClock(start.timestamp(), speed)
-    write_truth(sim, clock, Path(os.environ.get("TRUTH_DIR", "/truth")), routes)
+    outages = parse_outages(os.environ.get("SIM_OUTAGES", ""), start.timestamp())
+    write_truth(sim, clock, Path(os.environ.get("TRUTH_DIR", "/truth")), routes, outages)
 
     store = FeedStore(sim, clock, float(os.environ.get("REFRESH_SECONDS", "30")),
                       float(os.environ.get("P_BLINK", "0.05")), rng)
@@ -147,6 +162,9 @@ def main() -> None:
             fid = path_to_feed.get(path)
             if fid is None:
                 return self._send(404, b"not found", "text/plain")
+            now = clock.now()
+            if any(a <= now < b for a, b in outages):
+                return self._send(503, b"outage", "text/plain")
             if rng.random() < p_error:
                 return self._send(503, b"busy", "text/plain")
             self._send(200, store.get(fid, stale=rng.random() < p_stale), "application/x-protobuf")

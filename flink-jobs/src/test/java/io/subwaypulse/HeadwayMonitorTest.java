@@ -36,16 +36,16 @@ class HeadwayMonitorTest {
         return new Arrival(trip, "l", "L", "N", "L08N", t, t + 30_000, 0);
     }
 
-    static KeyedTwoInputStreamOperatorTestHarness<String, Arrival, ScheduleRow, Headway> harness(int schedS)
+    static KeyedTwoInputStreamOperatorTestHarness<String, Arrival, Reference, Headway> harness(int schedS)
             throws Exception {
-        var op = new CoBroadcastWithKeyedOperator<>(new HeadwayMonitor(DELAY), List.of(HeadwayMonitor.SCHEDULE));
+        var op = new CoBroadcastWithKeyedOperator<>(new HeadwayMonitor(DELAY), List.of(HeadwayMonitor.SCHEDULE, HeadwayMonitor.OUTAGES));
         var h = new KeyedTwoInputStreamOperatorTestHarness<>(op, Arrival::lineStopKey, r -> "unused", Types.STRING);
         h.open();
-        h.processElement2(new StreamRecord<>(sched(schedS)));
+        h.processElement2(new StreamRecord<>(Reference.of(sched(schedS))));
         return h;
     }
 
-    static List<Headway> headways(KeyedTwoInputStreamOperatorTestHarness<String, Arrival, ScheduleRow, Headway> h) {
+    static List<Headway> headways(KeyedTwoInputStreamOperatorTestHarness<String, Arrival, Reference, Headway> h) {
         List<Headway> out = new ArrayList<>();
         for (Object o : h.getOutput()) {
             if (o instanceof StreamRecord<?> r) {
@@ -55,7 +55,7 @@ class HeadwayMonitorTest {
         return out;
     }
 
-    static List<String> incidents(KeyedTwoInputStreamOperatorTestHarness<String, Arrival, ScheduleRow, Headway> h) {
+    static List<String> incidents(KeyedTwoInputStreamOperatorTestHarness<String, Arrival, Reference, Headway> h) {
         List<String> out = new ArrayList<>();
         var side = h.getSideOutput(HeadwayMonitor.INCIDENTS);
         if (side != null) {
@@ -122,12 +122,52 @@ class HeadwayMonitorTest {
     @Test
     void acrossAnHourBoundaryAGapIsJudgedOnTheScheduleWhenThePreviousTrainCame() throws Exception {
         var h = harness(300);                                    // 8 AM: every 5 min, gap at 600s
-        h.processElement2(new StreamRecord<>(sched(7, 420)));    // 7 AM: every 7 min, gap at 840s
+        h.processElement2(new StreamRecord<>(Reference.of(sched(7, 420))));    // 7 AM: every 7 min, gap at 840s
         h.processElement1(new StreamRecord<>(arr("t1", -240)));  // 7:56
         h.processElement1(new StreamRecord<>(arr("t2", 420)));   // 8:07, 660s later
         h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 420_000 + DELAY));
         assertEquals("OK", headways(h).get(0).status);
         assertEquals(List.of(), incidents(h));
+    }
+
+    static Reference outage(long fromS, long toS) {
+        return Reference.of(new Outage("l", T0 + fromS * 1000, T0 + toS * 1000));
+    }
+
+    @Test
+    void noGapAlarmWhenTheFeedWasDownDuringTheWait() throws Exception {
+        var h = harness(240); // gap threshold 540s
+        h.processElement1(new StreamRecord<>(arr("t1", 0)));
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + DELAY));
+        // No fetch succeeded from 200s to 900s (say the machine slept), then data resumes
+        h.processElement2(new StreamRecord<>(outage(200, 900)));
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 900_000));
+        assertEquals(List.of(), incidents(h));
+    }
+
+    @Test
+    void noHeadwayAcrossAnOutageAndTheNextOneIsMeasuredNormally() throws Exception {
+        var h = harness(240);
+        h.processElement2(new StreamRecord<>(outage(200, 900)));
+        h.processElement1(new StreamRecord<>(arr("t1", 0)));
+        h.processElement1(new StreamRecord<>(arr("t2", 950)));   // a train in between may have been missed
+        h.processElement1(new StreamRecord<>(arr("t3", 1190)));
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 1190_000 + DELAY));
+        var hw = headways(h);
+        assertEquals(1, hw.size());
+        assertEquals("t3", hw.get(0).tripKey);
+        assertEquals(240, hw.get(0).headwaySeconds);
+        assertEquals(List.of(), incidents(h));
+    }
+
+    @Test
+    void anOutageOnAnotherFeedChangesNothing() throws Exception {
+        var h = harness(240);
+        h.processElement1(new StreamRecord<>(arr("t1", 0)));
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + DELAY));
+        h.processElement2(new StreamRecord<>(Reference.of(new Outage("ace", T0 + 200_000, T0 + 900_000))));
+        h.processBothWatermarks(new org.apache.flink.streaming.api.watermark.Watermark(T0 + 540_000));
+        assertEquals(List.of("GAP_OPENED"), incidents(h));
     }
 
     @Test
@@ -142,8 +182,8 @@ class HeadwayMonitorTest {
 
     @Test
     void noScheduleMeansNoGapAlarm() throws Exception {
-        var op = new CoBroadcastWithKeyedOperator<>(new HeadwayMonitor(DELAY), List.of(HeadwayMonitor.SCHEDULE));
-        var h = new KeyedTwoInputStreamOperatorTestHarness<String, Arrival, ScheduleRow, Headway>(
+        var op = new CoBroadcastWithKeyedOperator<>(new HeadwayMonitor(DELAY), List.of(HeadwayMonitor.SCHEDULE, HeadwayMonitor.OUTAGES));
+        var h = new KeyedTwoInputStreamOperatorTestHarness<String, Arrival, Reference, Headway>(
                 op, Arrival::lineStopKey, r -> "unused", Types.STRING);
         h.open();
         h.processElement1(new StreamRecord<>(arr("t1", 0)));

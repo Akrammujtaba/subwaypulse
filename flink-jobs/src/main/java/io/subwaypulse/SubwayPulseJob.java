@@ -65,6 +65,7 @@ public class SubwayPulseJob {
         long outOfOrderMs = Long.parseLong(env("OUT_OF_ORDER_SECONDS", "45")) * 1000;
         long releaseDelayMs = Long.parseLong(env("RELEASE_DELAY_SECONDS", "60")) * 1000;
         long checkpointMs = Long.parseLong(env("CHECKPOINT_SECONDS", "30")) * 1000;
+        long outageAfterMs = Long.parseLong(env("OUTAGE_AFTER_SECONDS", "120")) * 1000;
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.enableCheckpointing(checkpointMs, CheckpointingMode.EXACTLY_ONCE);
@@ -92,10 +93,21 @@ public class SubwayPulseJob {
                 .withTimestampAssigner((e, ts) -> e.getFeedTs().toEpochMilli())
                 .withIdleness(Duration.ofMinutes(2));
 
-        DataStream<TripEvent> tripEvents = env.fromSource(tripSource, wm, "trip-events")
-                .uid("trip-events-source")
+        DataStream<TripEvent> allEvents = env.fromSource(tripSource, wm, "trip-events")
+                .uid("trip-events-source");
+        DataStream<TripEvent> tripEvents = allEvents
                 .filter(e -> e.getEventType() != TripEventType.HEARTBEAT)
                 .name("drop-heartbeats").uid("drop-heartbeats");
+
+        // Heartbeats mark every successful fetch; a long silence between two is an outage.
+        DataStream<Reference> outages = allEvents
+                .filter(e -> e.getEventType() == TripEventType.HEARTBEAT)
+                .name("heartbeats").uid("heartbeats")
+                .keyBy(e -> e.getFeedId())
+                .process(new OutageDetector(outageAfterMs))
+                .name("outage-detector").uid("outage-detector")
+                .map(o -> Reference.of(o)).returns(Reference.class)
+                .name("outage-ref").uid("outage-ref");
 
         // ---------- schedule (broadcast) ----------
         KafkaSource<String> scheduleSource = KafkaSource.<String>builder()
@@ -117,11 +129,15 @@ public class SubwayPulseJob {
             }
         });
 
-        BroadcastStream<ScheduleRow> schedule = env.fromSource(scheduleSource, neverBlocks, "schedule")
+        // Schedule rows and outages share one broadcast input. Its watermark is the
+        // outages' (the schedule's is MAX), so an outage arrives before timers inside it fire.
+        BroadcastStream<Reference> reference = env.fromSource(scheduleSource, neverBlocks, "schedule")
                 .uid("schedule-source")
                 .map(new ParseSchedule()).name("parse-schedule").uid("parse-schedule")
                 .filter(r -> r != null)
-                .broadcast(HeadwayMonitor.SCHEDULE);
+                .map(r -> Reference.of(r)).returns(Reference.class).name("schedule-ref").uid("schedule-ref")
+                .union(outages)
+                .broadcast(HeadwayMonitor.SCHEDULE, HeadwayMonitor.OUTAGES);
 
         // ---------- processing ----------
         DataStream<Arrival> arrivals = tripEvents
@@ -131,7 +147,7 @@ public class SubwayPulseJob {
 
         SingleOutputStreamOperator<Headway> headways = arrivals
                 .keyBy(Arrival::lineStopKey)
-                .connect(schedule)
+                .connect(reference)
                 .process(new HeadwayMonitor(releaseDelayMs))
                 .name("headway-monitor").uid("headway-monitor");
 

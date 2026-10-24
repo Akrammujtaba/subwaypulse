@@ -64,12 +64,22 @@ def load_truth(truth_dir: Path):
     return meta, arrivals
 
 
-def true_incidents(arrivals, schedule: dict, window: Window, observed_from: float):
+# A feed outage hides everything near it: the last snapshot before it and the first one
+# after it can each be a refresh old.
+OUTAGE_MARGIN_S = 60
+
+
+def overlaps(outages, a: float, b: float) -> bool:
+    return any(s - OUTAGE_MARGIN_S < b and e + OUTAGE_MARGIN_S > a for s, e in outages)
+
+
+def true_incidents(arrivals, schedule: dict, window: Window, observed_from: float, outages=()):
     """Return (bunching, gaps). Bunching keyed by (route, stop, trip_key of the second
     train); gaps keyed by (route, stop, prev_trip_key). Values: knowable-at time.
 
     Incidents whose first train passed before `observed_from` (when the feed started)
-    are left out: no pipeline could have seen that train arrive."""
+    are left out: no pipeline could have seen that train arrive. So are incidents that
+    span a simulated feed outage: during one, nobody can tell whether a train came."""
     by_stop = defaultdict(list)
     for route, _d, stop, trip, ts in arrivals:
         by_stop[(route, stop)].append((ts, trip))
@@ -82,7 +92,8 @@ def true_incidents(arrivals, schedule: dict, window: Window, observed_from: floa
             t_next, trip_next = rows[i + 1] if i + 1 < len(rows) else (math.inf, None)
             if trip_next is not None:
                 sched = schedule.get(sched_key(route, stop, t_next))
-                if classify(t_next - t_prev, sched) == "BUNCHING" and window.start <= t_next <= window.end:
+                if (classify(t_next - t_prev, sched) == "BUNCHING" and window.start <= t_next <= window.end
+                        and not overlaps(outages, t_prev, t_next)):
                     bunching[(route, stop, trip_next)] = t_next
             # A gap is judged the way the pipeline's timer judges it: on the schedule in
             # force when the previous train arrived, and only if service is still
@@ -93,7 +104,7 @@ def true_incidents(arrivals, schedule: dict, window: Window, observed_from: floa
             deadline = t_prev + gap_threshold_s(sched_prev)
             if schedule.get(sched_key(route, stop, deadline)) is None:
                 continue
-            if t_next > deadline and window.start <= deadline <= window.end:
+            if t_next > deadline and window.start <= deadline <= window.end and not overlaps(outages, t_prev, deadline):
                 gaps[(route, stop, trip_prev)] = deadline
     return bunching, gaps
 
@@ -172,9 +183,12 @@ def main() -> None:
 
     # ----- incidents -----
     observed_from = meta["sim_start"] + 60
-    t_bunch, t_gap = true_incidents(truth_arrivals, schedule, window, observed_from=observed_from)
+    outages = [tuple(o) for o in meta.get("outages", [])]
+    t_bunch, t_gap = true_incidents(truth_arrivals, schedule, window, observed_from=observed_from,
+                                    outages=outages)
     # key -> (event time as the pipeline saw it, detection time in simulated seconds)
     p_bunch, p_gap = {}, {}
+    gaps_in_outage = set()
     for etype, route, stop, trip, prev_trip, prev_at, ev, det in p_incidents:
         target, key = (p_bunch, (route, stop, trip)) if etype == "BUNCHING" else (p_gap, (route, stop, prev_trip))
         if etype not in ("BUNCHING", "GAP_OPENED"):
@@ -186,6 +200,8 @@ def main() -> None:
         d = wall_to_sim(ts(det))
         if key not in target or d < target[key][1]:
             target[key] = (ts(ev), d)
+        if etype == "GAP_OPENED" and overlaps(outages, ts(prev_at), ts(ev)):
+            gaps_in_outage.add(key)
 
     def score(truth: dict, pred: dict):
         hit = [k for k in truth if k in pred]
@@ -227,6 +243,12 @@ def main() -> None:
         f"| Gaps detected while open (recall) | {ratio(len(g_hit), len(t_gap))} |",
         f"| Gap precision | {precision(g_hit, g_false)} |",
         f"| Gap detection latency p50 / p95 | {fmt(pct(g_lat, 50))} / {fmt(pct(g_lat, 95))} |",
+    ]
+    if outages:
+        mins = ", ".join(
+            f"{datetime.fromtimestamp(a, tz=NY):%H:%M}-{datetime.fromtimestamp(b, tz=NY):%H:%M}" for a, b in outages)
+        lines.append(f"| Gap alerts raised across a feed outage ({mins}) | {len(gaps_in_outage)} |")
+    lines += [
         "",
         f"Thresholds: bunching at max(90s, 30% of scheduled headway), e.g. {bunching_threshold_s(240)}s on a "
         f"4-minute schedule; gap at scheduled + max(5 min, scheduled), e.g. {gap_threshold_s(240)}s.",

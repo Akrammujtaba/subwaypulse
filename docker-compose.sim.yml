@@ -13,6 +13,7 @@ services:
       SIM_SPEED: ${SIM_SPEED:-1}
       SIM_SEED: ${SIM_SEED:-7}
       HOLDS_PER_HOUR: ${HOLDS_PER_HOUR:-6}
+      SIM_OUTAGES: ${SIM_OUTAGES:-}
       REFRESH_SECONDS: "30"
       TRUTH_DIR: /truth
     volumes:

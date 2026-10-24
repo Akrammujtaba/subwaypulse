@@ -63,3 +63,24 @@ def test_stops_leave_the_feed_once_the_train_departs():
     before = [p[0] for p in s.predictions(t, t.arr[mid] - 1)]
     after = [p[0] for p in s.predictions(t, t.dep[mid] + 1)]
     assert t.stop_ids[mid] in before and t.stop_ids[mid] not in after
+
+
+
+def test_outage_spec_and_truth_leave_out_what_nobody_could_see():
+    from subwaypulse.evaluate import Window, sched_key, true_incidents
+    from subwaypulse.sim.server import parse_outages
+
+    start = START.timestamp()
+    assert parse_outages("30+10, 90+5", start) == [(start + 1800, start + 2400), (start + 5400, start + 5700)]
+    assert parse_outages("", start) == []
+
+    # One stop on a 4-minute schedule (gap at 540s): a train at 0s, the next at 1200s.
+    schedule = {sched_key("L", "L08N", start): 240}
+    arrivals = [("L", "N", "L08N", "t1", start), ("L", "N", "L08N", "t2", start + 1200)]
+    window = Window(start - 600, start + 1500)
+    _, gaps = true_incidents(arrivals, schedule, window, observed_from=start - 60)
+    assert list(gaps) == [("L", "L08N", "t1")]
+    # The feed was down from 300s to 700s: nobody could know whether a train came.
+    _, gaps = true_incidents(arrivals, schedule, window, observed_from=start - 60,
+                             outages=[(start + 300, start + 700)])
+    assert gaps == {}
