@@ -32,7 +32,10 @@ def main() -> None:
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="evaluation/results-live.md")
+    ap.add_argument("--since", help="only count rows from this UTC time on, e.g. 2026-10-26T22:30")
     args = ap.parse_args()
+    # Trino timestamp literal; the default reaches back past any real run.
+    since = f"TIMESTAMP '{(args.since or '1970-01-01T00:00').replace('T', ' ')} UTC'"
     p = os.environ.get("PROMETHEUS_URL", "http://localhost:9090")
 
     def total(metric: str, labels: str = "") -> float:
@@ -49,6 +52,8 @@ def main() -> None:
     trains = total("sp_trips_active")
     feed_age_p50 = prom(p, "quantile(0.5, sp_feed_age_seconds)")
     ckpt = prom(p, "max(flink_jobmanager_job_lastCheckpointDuration)")
+    outages = total("flink_taskmanager_job_task_operator_feedOutages")
+    gaps_skipped = total("flink_taskmanager_job_task_operator_gapsSkippedForOutage")
 
     conn = trino.dbapi.connect(host=os.environ.get("TRINO_HOST", "localhost"),
                                port=int(os.environ.get("TRINO_PORT", "8080")), user="report", catalog="lake")
@@ -60,22 +65,23 @@ def main() -> None:
 
     first, last, n_arr, n_trips, n_stops = one(
         "SELECT min(arrival_ts), max(arrival_ts), count(*), count(DISTINCT trip_key), count(DISTINCT stop_id) "
-        "FROM silver.arrivals")
+        f"FROM silver.arrivals WHERE arrival_ts >= {since}")
     n_hw, n_sched, n_bunch, n_gap = one(
         "SELECT count(*), count_if(status <> 'UNSCHEDULED'), count_if(status = 'BUNCHING'), "
-        "count_if(status = 'GAP') FROM silver.headways")
-    gaps_live, = one("SELECT count(*) FROM gold.incident_events WHERE event_type = 'GAP_OPENED'")
+        f"count_if(status = 'GAP') FROM silver.headways WHERE arrival_ts >= {since}")
+    gaps_live, = one(f"SELECT count(*) FROM gold.incident_events WHERE event_type = 'GAP_OPENED' AND event_ts >= {since}")
     detect = one(
         "SELECT approx_percentile(date_diff('second', arrival_ts, detected_at), 0.5), "
-        "approx_percentile(date_diff('second', arrival_ts, detected_at), 0.95) FROM silver.arrivals")
+        f"approx_percentile(date_diff('second', arrival_ts, detected_at), 0.95) FROM silver.arrivals "
+        f"WHERE arrival_ts >= {since}")
     bunch_lat = one(
         "SELECT approx_percentile(date_diff('second', event_ts, detected_at), 0.5), "
         "approx_percentile(date_diff('second', event_ts, detected_at), 0.95) "
-        "FROM gold.incident_events WHERE event_type = 'BUNCHING'")
+        f"FROM gold.incident_events WHERE event_type = 'BUNCHING' AND event_ts >= {since}")
     gap_lat = one(
         "SELECT approx_percentile(date_diff('second', event_ts, detected_at), 0.5), "
         "approx_percentile(date_diff('second', event_ts, detected_at), 0.95) "
-        "FROM gold.incident_events WHERE event_type = 'GAP_OPENED'")
+        f"FROM gold.incident_events WHERE event_type = 'GAP_OPENED' AND event_ts >= {since}")
 
     hours = (last - first).total_seconds() / 3600 if first and last else 0
 
@@ -100,6 +106,7 @@ def main() -> None:
         f"| Arrival available after it happened, p50 / p95 | {s(detect[0])} / {s(detect[1])} |",
         f"| Bunching flagged after the second train arrived, p50 / p95 | {s(bunch_lat[0])} / {s(bunch_lat[1])} |",
         f"| Gap flagged after the next train became overdue, p50 / p95 | {s(gap_lat[0])} / {s(gap_lat[1])} |",
+        f"| Feed outages detected / gap alerts held back for them (since Flink started) | {outages:.0f} / {gaps_skipped:.0f} |",
         f"| Feed age, median across feeds | {s(feed_age_p50)} |",
         f"| Last Flink checkpoint | {'n/a' if ckpt is None else f'{ckpt / 1000:.1f}s'} |",
         "",
