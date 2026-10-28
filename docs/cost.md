@@ -25,7 +25,7 @@ Two things stand out:
 - **The streaming path is cheap.** Collector, Kafka, and Flink together average well under half a core.
 - **Trino is most of the memory.** It reserves a 4 GB heap whether or not anyone is querying. In production it would be started on demand, or replaced with Athena.
 
-These numbers come from 3 of the 8 subway feeds. The live run covers all 8, and its numbers are in `evaluation/results-live.md`.
+These numbers come from 3 of the 8 subway feeds. The 29-hour live run covered all 8; its numbers are in [live-results.md](live-results.md).
 
 ## On AWS
 
@@ -55,3 +55,14 @@ The design choices that keep the bill small, each measured by a counter rather t
 | Raw archive to Glacier Instant Retrieval after 30 days, deleted after 365 | Old raw data costs a fraction of Standard | S3 lifecycle rule in `infra/terraform/main.tf` |
 
 The live run reports all of these in one table (`docker compose run --rm live-report`).
+
+## What the live run says about S3
+
+From the 29.1-hour live run on all 8 feeds ([live-results.md](live-results.md)), for the raw archive only:
+
+| | 29.1 hours | Per 30 days, at the same rate | Cost per month |
+|---|---|---|---|
+| Bytes written | 112 MB | about 2.8 GB added | about $0.06 for each month's data in S3 Standard |
+| Objects (PUTs) | 2,592 | about 64,000 | about $0.32 |
+
+One object per fetch would have been 56,400 PUTs in the same 29 hours (about 1.4 million a month, about $7). The Iceberg tables add their own writes on every 30-second checkpoint, which these counters don't include.

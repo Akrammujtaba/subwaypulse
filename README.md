@@ -95,13 +95,26 @@ Most misses sit right at a threshold. Bunched trains in the simulator run 75 to 
 
 **The first run was much worse, and the evaluator showed why.** Only 58.5% of gap alerts were real. Matching each false alert against the ground truth found three bugs: trains held at a platform counted as arrived only when they left, the gap timer raced arrivals waiting for release, and two parts of the job used different hours' schedules at the top of the hour. Over the same window, real gap alerts went from 58.5% to 79.5% to 87.9%. The full story is in [design decisions](docs/design-decisions.md), and the raw evaluator output is in [docs/simulator-results.md](docs/simulator-results.md).
 
-**Change-only publishing, measured on the same run:** 48% of fetches had no new content and were dropped before parsing. Kafka received 5.4 MB of trip events instead of 14.3 MB (62% less). The raw archive wrote 81 compressed objects (1.0 MB) instead of one object per fetch (17.1 MB). These are simulator feeds, which refresh every 30 seconds, so the live numbers will differ.
+**Change-only publishing, measured on the same run:** 48% of fetches had no new content and were dropped before parsing. Kafka received 5.4 MB of trip events instead of 14.3 MB (62% less). The raw archive wrote 81 compressed objects (1.0 MB) instead of one object per fetch (17.1 MB). These are simulator feeds, which refresh every 30 seconds. On the live feeds, almost every fetch has something new, and trip-level diffing saved 68.6% (below).
 
 ### On the live MTA feeds
 
-The same stack runs against all 8 of the MTA's subway feeds with no changes. In the first 8 minutes of a weekday evening rush, it inferred 1,904 arrivals across 30 routes, including shuttles and express variants.
+The same stack ran on all 8 of the MTA's subway feeds for 29 hours, from a Monday evening through Tuesday night, on one laptop:
 
-Numbers from a longer live run are produced by `docker compose run --rm live-report` (see [docs/running-live.md](docs/running-live.md)). Live feeds have no ground truth, so accuracy is measured only on the simulator.
+| Metric | Result |
+|---|---|
+| Arrivals inferred | **276,203** at 1,026 stops (10,885 trips) |
+| Headways with a schedule to compare to | 98.7% of 269,373 |
+| Arrival available after the train arrived | **21s median**, 57s p95 |
+| Gap alert, after the next train became overdue | **54s median**, 63s p95 |
+| Bunching alert, after the second train arrived | 114s median, 122s p95 |
+| Feed outages detected / gap alerts held back for them | 14 / 404 |
+| Kafka bytes vs. sending every trip on every fetch | 691 MB vs. 2,199 MB (**68.6% less**) |
+| Raw archive written to S3 | 3,949 MB of snapshots as 112 MB in 2,592 objects |
+
+Live feeds have no ground truth, so these show coverage, speed and cost, not accuracy. The full report and how to read it: [docs/live-results.md](docs/live-results.md). To reproduce it: [docs/running-live.md](docs/running-live.md).
+
+**No data is not the same as no trains.** An earlier live run was on a laptop that went to sleep. When it woke, every station looked like it had gone hours without a train, and the job raised thousands of false gap alerts. The simulator can now take every feed down on purpose. In a 50-minute run with a 10-minute outage, the old job raised 287 gap alerts across it, and only 5.5% of its gap alerts were real. The job now detects a feed going silent and won't open a gap until the feed has been seen past the deadline: 1 alert across the outage, and 100% of gap alerts real. Details in [design decisions](docs/design-decisions.md) (bug 7).
 
 ### Cost
 

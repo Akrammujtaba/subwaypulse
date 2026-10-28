@@ -32,11 +32,13 @@ When you're done watching:
 
 ```bash
 docker compose run --rm live-report       # writes evaluation/results-live.md
+# only count a clean stretch, e.g. after a restart:
+docker compose run --rm live-report --since 2026-10-26T22:30
 docker compose down                       # keeps the data; add -v to wipe it
 ```
 
-`evaluation/results-live.md` is the source for every live number in the README. The raw feed archive stays in your local object store and is not committed: MTA's terms allow hosting the data, but the repo only carries code.
+The README's live numbers come from this report; the run they come from is in [live-results.md](live-results.md). The raw feed archive stays in your local object store and is never committed. The repo only carries code.
 
 ## Laptop sleep
 
-If the laptop sleeps, the collector stops polling and the feeds' timestamps jump when it wakes. The pipeline copes (the watermark just moves forward), but the hours spent asleep have no data. For a clean run, keep the machine awake.
+If the laptop sleeps, the collector stops polling and the feeds' timestamps jump when it wakes. The job treats the silence as a feed outage: it doesn't raise gap alerts or measure headways across it. But the hours spent asleep have no data, and arrivals right after waking show long delays. For a clean run, keep the machine awake, and use `--since` to report from after the last restart.
