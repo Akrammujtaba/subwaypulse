@@ -269,6 +269,7 @@ services:
     ports: ["3000:3000"]
 
   # Run on demand after watching the live feeds: docker compose run --rm live-report
+  # (extra flags are appended, e.g. --since 2026-10-26T22:30)
   live-report:
     build: {context: ., dockerfile: infra/python/Dockerfile}
     profiles: ["tools"]
@@ -278,7 +279,8 @@ services:
       TRINO_PORT: "8080"
     volumes:
       - ./evaluation:/out
-    command: ["python", "-m", "subwaypulse.live_report", "--out", "/out/results-live.md"]
+    entrypoint: ["python", "-m", "subwaypulse.live_report", "--out", "/out/results-live.md"]
+    command: []
 
 volumes:
   pgdata:
