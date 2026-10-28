@@ -112,6 +112,8 @@ The same stack ran on all 8 of the MTA's subway feeds for 29 hours, from a Monda
 | Kafka bytes vs. sending every trip on every fetch | 691 MB vs. 2,199 MB (**68.6% less**) |
 | Raw archive written to S3 | 3,949 MB of snapshots as 112 MB in 2,592 objects |
 
+![The Grafana dashboard near the end of the 29-hour live run](docs/img/dashboard-live.png)
+
 Live feeds have no ground truth, so these show coverage, speed and cost, not accuracy. The full report and how to read it: [docs/live-results.md](docs/live-results.md). To reproduce it: [docs/running-live.md](docs/running-live.md).
 
 **No data is not the same as no trains.** An earlier live run was on a laptop that went to sleep. When it woke, every station looked like it had gone hours without a train, and the job raised thousands of false gap alerts. The simulator can now take every feed down on purpose. In a 50-minute run with a 10-minute outage, the old job raised 287 gap alerts across it, and only 5.5% of its gap alerts were real. The job now detects a feed going silent and won't open a gap until the feed has been seen past the deadline: 1 alert across the outage, and 100% of gap alerts real. Details in [design decisions](docs/design-decisions.md) (bug 7).
